@@ -60,7 +60,9 @@
         document.body.appendChild(renderer.domElement);
 
         const controls = new OrbitControls(camera, renderer.domElement);
-        controls.enableZoom = false; // Zooming inside a fixed sphere looks weird
+        controls.enableZoom = true; // Enable zoom for better navigation
+        controls.minDistance = 10; // Minimum zoom distance
+        controls.maxDistance = 100; // Maximum zoom distance
         controls.rotateSpeed = -0.5; // Invert drag for "dragging the scene" feel
 
         // --- THE DOME (360 Sphere) ---
@@ -68,47 +70,126 @@
         // Flip the geometry inside out so we see the texture from the inside
         geometry.scale(-1, 1, 1); 
         
-        const material = new THREE.MeshBasicMaterial({ map: null }); // Will load later
-        const sphere = new THREE.Mesh(geometry, material);
-        scene.add(sphere);
+        // Create two spheres for crossfading
+        const material1 = new THREE.MeshBasicMaterial({ map: null, transparent: true, opacity: 1 });
+        const material2 = new THREE.MeshBasicMaterial({ map: null, transparent: true, opacity: 0 });
+        const sphere1 = new THREE.Mesh(geometry, material1);
+        const sphere2 = new THREE.Mesh(geometry.clone(), material2);
+        scene.add(sphere1);
+        scene.add(sphere2);
+        
+        let activeSphere = sphere1;
+        let inactiveSphere = sphere2;
 
         // --- HOTSPOTS (Navigation arrows) ---
         const hotspots = [];
         const raycaster = new THREE.Raycaster();
         const mouse = new THREE.Vector2();
         const tooltip = document.getElementById('tooltip');
+        
+        // Transition state
+        let isTransitioning = false;
+        const transitionDuration = 1200; // milliseconds
 
         function loadScene(sceneId) {
+            if (isTransitioning) return; // Prevent double transitions
+            isTransitioning = true;
+            
             const data = tourData[sceneId];
-
-            // 1. Load Texture
+            
+            // Load new texture into inactive sphere first
             const loader = new THREE.TextureLoader();
             loader.load(data.texture, (texture) => {
                 texture.minFilter = THREE.LinearFilter;
                 texture.magFilter = THREE.LinearFilter;
-                texture.mapping = THREE.EquirectangularReflectionMapping; // Helpful hint to THREE.js
-                sphere.material.map = texture;
-                sphere.material.needsUpdate = true;
+                texture.mapping = THREE.EquirectangularReflectionMapping;
+                inactiveSphere.material.map = texture;
+                inactiveSphere.material.needsUpdate = true;
+                
+                // Start crossfade and zoom transition
+                startTransition(data);
             });
+            
+            currentSceneId = sceneId;
+        }
 
-            // 2. Clear old hotspots
+        function startTransition(data) {
+            const startTime = performance.now();
+            const initialZoom = camera.position.length();
+            const targetZoom = 25; // Zoom in during transition
+            
+            // Clear old hotspots
             hotspots.forEach(h => scene.remove(h));
             hotspots.length = 0;
-
-            // 3. Create new hotspots
+            
+            // Create new hotspots (initially invisible)
+            const newHotspots = [];
             data.links.forEach(link => {
                 const markerGeo = new THREE.SphereGeometry(1, 16, 16);
-                const markerMat = new THREE.MeshBasicMaterial({ color: 0xff0000, transparent: true, opacity: 0.6 });
+                const markerMat = new THREE.MeshBasicMaterial({ 
+                    color: 0xff0000, 
+                    transparent: true, 
+                    opacity: 0 
+                });
                 const marker = new THREE.Mesh(markerGeo, markerMat);
                 
                 marker.position.copy(link.position);
                 marker.userData = { target: link.target, label: link.label };
                 
                 scene.add(marker);
-                hotspots.push(marker);
+                newHotspots.push(marker);
             });
             
-            currentSceneId = sceneId;
+            function animate(currentTime) {
+                const elapsed = currentTime - startTime;
+                const progress = Math.min(elapsed / transitionDuration, 1);
+                
+                // Smooth easing function (ease-in-out)
+                const eased = progress < 0.5 
+                    ? 2 * progress * progress 
+                    : 1 - Math.pow(-2 * progress + 2, 2) / 2;
+                
+                // Crossfade between spheres
+                activeSphere.material.opacity = 1 - eased;
+                inactiveSphere.material.opacity = eased;
+                
+                // Zoom animation (zoom in then out)
+                let zoomProgress;
+                if (progress < 0.5) {
+                    // Zoom in first half
+                    const halfProgress = progress * 2;
+                    zoomProgress = initialZoom + (targetZoom - initialZoom) * halfProgress;
+                } else {
+                    // Zoom out second half
+                    const halfProgress = (progress - 0.5) * 2;
+                    zoomProgress = targetZoom + (initialZoom - targetZoom) * halfProgress;
+                }
+                camera.position.setLength(zoomProgress);
+                
+                // Fade in new hotspots in second half of transition
+                if (progress > 0.5) {
+                    const hotspotProgress = (progress - 0.5) * 2;
+                    newHotspots.forEach(h => {
+                        h.material.opacity = 0.6 * hotspotProgress;
+                    });
+                }
+                
+                if (progress < 1) {
+                    requestAnimationFrame(animate);
+                } else {
+                    // Swap active/inactive spheres
+                    activeSphere.material.opacity = 0;
+                    inactiveSphere.material.opacity = 1;
+                    [activeSphere, inactiveSphere] = [inactiveSphere, activeSphere];
+                    
+                    // Update hotspots array
+                    hotspots.push(...newHotspots);
+                    
+                    isTransitioning = false;
+                }
+            }
+            
+            requestAnimationFrame(animate);
         }
 
         // --- INTERACTION ---
