@@ -170,7 +170,7 @@ for i in range(len(panoramas)):
     cv2.imwrite(f'results/panorama_{i}_stitched.jpg', stitched)
     panorama_results.append({
         'id': f'view_{i}',
-        'stitched_image': f'results/panorama_{i}_stitched.jpg',
+        'stitched_image': f'./results/panorama_{i}_stitched.jpg',
         'image_width': stitched.shape[1],
         'image_height': stitched.shape[0],
         'links': [{'point': pt.tolist(), 'label': lbl, 'id': id_} for pt, lbl, id_ in zip(modified_points, labels, ids)]
