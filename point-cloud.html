@@ -231,6 +231,69 @@
             }
         });
 
+        window.addEventListener('dblclick', (event) => {
+            // Prevent 3D clicks if overlay is visible
+            if(document.getElementById('image-overlay').style.display === 'flex') return;
+
+            raycaster.setFromCamera(mouse, camera);
+            
+            // Try to intersect with the point cloud
+            const pointCloudIntersects = raycaster.intersectObjects(worldGroup.children, true);
+            
+            if (pointCloudIntersects.length > 0) {
+                const clickedPoint = pointCloudIntersects[0].point;
+                const bestCamera = findBestCameraForPoint(clickedPoint);
+                
+                if (bestCamera) {
+                    enterCameraView(bestCamera);
+                }
+            }
+        });
+
+        function findBestCameraForPoint(point) {
+            if (cameraMarkers.length === 0) return null;
+
+            let bestCamera = null;
+            let bestScore = Infinity;
+
+            cameraMarkers.forEach(marker => {
+                // Get camera position in world space
+                const cameraPos = new THREE.Vector3();
+                marker.getWorldPosition(cameraPos);
+
+                // Get camera orientation in world space
+                const cameraQuat = new THREE.Quaternion();
+                marker.getWorldQuaternion(cameraQuat);
+
+                // Calculate vector from camera to point
+                const toPoint = point.clone().sub(cameraPos);
+                const distance = toPoint.length();
+
+                // Get camera forward direction (Three.js cameras look down -Z)
+                const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(cameraQuat);
+
+                // Calculate if point is in front of camera
+                const dotProduct = toPoint.normalize().dot(forward);
+
+                // Point should be in front (dotProduct > 0) and visible (roughly in view cone)
+                // cos(60°) ≈ 0.5 for a reasonable field of view
+                const isVisible = dotProduct > 0.3;
+
+                if (isVisible) {
+                    // Score: lower is better (prioritize closer cameras with better alignment)
+                    // Weight distance heavily but also consider viewing angle
+                    const score = distance * (2 - dotProduct);
+                    
+                    if (score < bestScore) {
+                        bestScore = score;
+                        bestCamera = marker;
+                    }
+                }
+            });
+
+            return bestCamera;
+        }
+
         // --- ANIMATION: Fly to Camera ---
         function enterCameraView(targetMesh) {
             controls.enabled = false;
