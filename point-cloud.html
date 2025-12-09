@@ -101,7 +101,7 @@
         
         // 2. Camera Setup
         const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-        camera.position.set(0, 5, 10); // Initial view
+        camera.position.set(0, 2, 4); // Initial view
 
         // 3. Renderer Setup
         const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -333,11 +333,6 @@
             setTimeout(() => {
                 overlay.style.display = 'none';
                 controls.enabled = true;
-                
-                // Zoom back slightly
-                const dir = new THREE.Vector3();
-                camera.getWorldDirection(dir);
-                camera.position.addScaledVector(dir, -2.0);
             }, 500);
         });
 
