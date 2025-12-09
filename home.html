@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Splat-Baked Tour</title>
+    <style>
+        body { margin: 0; overflow: hidden; }
+        #tooltip {
+            position: absolute; background: white; padding: 5px; 
+            border-radius: 4px; display: none; pointer-events: none;
+        }
+    </style>
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://cdn.jsdelivr.net/npm/three@0.157.0/build/three.module.js"
+            }
+        }
+    </script>
+</head>
+<body>
+    <div id="tooltip">Go to Kitchen</div>
+    <script src="results/panorama_results.js" type="application/javascript"></script>
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'https://cdn.jsdelivr.net/npm/three@0.157.0/examples/jsm/controls/OrbitControls.js';
+
+        // --- CONFIGURATION ---
+        // Define your spots. Each spot has a texture and a list of links to other spots.
+        const tourData = {};
+        for (const panorama of panoramaResults) {
+            const links = panorama.links.map(link => {
+                const point2d = link.point;
+                // Convert 2D point in image to 3D position on sphere
+                const u = point2d[0] / panorama.image_width;
+                const v = point2d[1] / panorama.image_height;
+                const theta = u * 2 * Math.PI; // azimuthal angle
+                const phi = v * Math.PI; // polar angle
+                const radius = 50; // Same as sphere radius
+                const x = radius * Math.sin(phi) * Math.cos(theta);
+                const y = radius * Math.cos(phi);
+                const z = radius * Math.sin(phi) * Math.sin(theta);
+                return { position: new THREE.Vector3(x, y, z), target: link.id, label: link.label };
+            });
+            tourData[panorama.id] = {
+                texture: panorama.stitched_image,
+                links: links
+            };
+        }
+
+        let currentSceneId = panoramaResults[0].id; // Start from the first panorama
+
+        // --- SETUP ---
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(50, 16/  9, 0.1, 2000);
+        camera.position.set(0.1, 0, 0); // Offset slightly to allow OrbitControls to work inside sphere
+
+        const renderer = new THREE.WebGLRenderer();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
+
+        const controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableZoom = false; // Zooming inside a fixed sphere looks weird
+        controls.rotateSpeed = -0.5; // Invert drag for "dragging the scene" feel
+
+        // --- THE DOME (360 Sphere) ---
+        const geometry = new THREE.SphereGeometry(50, 60, 40);
+        // Flip the geometry inside out so we see the texture from the inside
+        geometry.scale(-1, 1, 1); 
+        
+        const material = new THREE.MeshBasicMaterial({ map: null }); // Will load later
+        const sphere = new THREE.Mesh(geometry, material);
+        scene.add(sphere);
+
+        // --- HOTSPOTS (Navigation arrows) ---
+        const hotspots = [];
+        const raycaster = new THREE.Raycaster();
+        const mouse = new THREE.Vector2();
+        const tooltip = document.getElementById('tooltip');
+
+        function loadScene(sceneId) {
+            const data = tourData[sceneId];
+
+            // 1. Load Texture
+            const loader = new THREE.TextureLoader();
+            loader.load(data.texture, (texture) => {
+                texture.minFilter = THREE.LinearFilter;
+                texture.magFilter = THREE.LinearFilter;
+                texture.mapping = THREE.EquirectangularReflectionMapping; // Helpful hint to THREE.js
+                sphere.material.map = texture;
+                sphere.material.needsUpdate = true;
+            });
+
+            // 2. Clear old hotspots
+            hotspots.forEach(h => scene.remove(h));
+            hotspots.length = 0;
+
+            // 3. Create new hotspots
+            data.links.forEach(link => {
+                const markerGeo = new THREE.SphereGeometry(1, 16, 16);
+                const markerMat = new THREE.MeshBasicMaterial({ color: 0xff0000, transparent: true, opacity: 0.6 });
+                const marker = new THREE.Mesh(markerGeo, markerMat);
+                
+                marker.position.copy(link.position);
+                marker.userData = { target: link.target, label: link.label };
+                
+                scene.add(marker);
+                hotspots.push(marker);
+            });
+            
+            currentSceneId = sceneId;
+        }
+
+        // --- INTERACTION ---
+        function onMouseClick(event) {
+            mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+            mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+
+            raycaster.setFromCamera(mouse, camera);
+            const intersects = raycaster.intersectObjects(hotspots);
+
+            if (intersects.length > 0) {
+                const targetId = intersects[0].object.userData.target;
+                loadScene(targetId);
+            }
+        }
+
+        function onMouseMove(event) {
+            mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+            mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+
+            raycaster.setFromCamera(mouse, camera);
+            const intersects = raycaster.intersectObjects(hotspots);
+
+            if (intersects.length > 0) {
+                document.body.style.cursor = 'pointer';
+                tooltip.style.display = 'block';
+                tooltip.style.left = event.clientX + 10 + 'px';
+                tooltip.style.top = event.clientY + 10 + 'px';
+                tooltip.innerText = intersects[0].object.userData.label;
+            } else {
+                document.body.style.cursor = 'default';
+                tooltip.style.display = 'none';
+            }
+        }
+
+        window.addEventListener('click', onMouseClick);
+        window.addEventListener('mousemove', onMouseMove);
+
+        // Start
+        loadScene(currentSceneId);
+
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+            renderer.render(scene, camera);
+        }
+        animate();
+    </script>
+</body>
+</html>

@@ -3,6 +3,7 @@ import numpy as np
 from matplotlib import pyplot as plt
 from exif import Image
 from scipy.spatial import cKDTree
+from bundle_adjustment import run_optimized_ba
 import open3d as o3d
 
 def detect_and_match_sift(img1, img2):
@@ -109,7 +110,7 @@ def compute_intrinsics_from_exif(image_path):
 
     return K
 
-def triangulate_dlt(P1, P2, pt1, pt2):
+def triangulate_dlt(P1, P2, pt1, pt2, threshold=15):
     A = np.zeros((4, 4), dtype=np.float64)
     u1, v1 = pt1
     u2, v2 = pt2
@@ -144,74 +145,90 @@ def triangulate_dlt(P1, P2, pt1, pt2):
     pt2_reproj /= pt2_reproj[2]
     error2 = np.linalg.norm(pt2_reproj[:2] - pt2)
 
-    if error1 > 15 or error2 > 15:
+    if error1 > threshold or error2 > threshold:
+        # print(f"High reprojection error: {error1}, {error2}")
         return None
 
     return X_cartesian
 
-
-def plot_point_cloud(pts_3D, colors=None, title="3D Point Cloud Reconstruction"):
+def create_camera_marker(location, size, color=[1, 0, 0]):
     """
-    Visualizes a 3D point cloud using Open3D.
-    
-    Args:
-        pts_3D: Numpy array of shape (N, 3)
-        colors: Numpy array of shape (N, 3) (RGB). Optional.
-        title: Window title string.
+    Creates a sphere to represent a camera position.
     """
-    pts_3D = np.asarray(pts_3D)
+    # Create a sphere mesh
+    mesh = o3d.geometry.TriangleMesh.create_sphere(radius=size)
     
-    if pts_3D.size == 0:
-        print("No points to plot.")
-        return
+    # Paint it a distinct color (default: Red)
+    mesh.paint_uniform_color(color)
+    
+    # Compute normals so it looks 3D (shaded) rather than a flat circle
+    mesh.compute_vertex_normals()
+    
+    # Move the sphere to the correct camera location
+    mesh.translate(location)
+    
+    return mesh
 
+def create_point_cloud(camera_positions, points_3D, colors=None):
     # 1. Initialize Open3D PointCloud object
     pcd = o3d.geometry.PointCloud()
-    pcd.points = o3d.utility.Vector3dVector(pts_3D)
+    points_3D = np.asarray(points_3D).copy()
+    pcd.points = o3d.utility.Vector3dVector(points_3D)
 
-    # 2. Handle Colors
-    if colors is not None and len(colors) == len(pts_3D):
+    # 2. Handle Colors (Default to Blue if None)
+    if colors is not None and len(colors) == len(points_3D):
         colors = np.asarray(colors)
-        
-        # Open3D expects colors in range [0, 1] (Float)
-        # Common bug: Passing [0, 255] (Int) results in all points being black/white.
         if colors.max() > 1.1: 
             colors = colors.astype(np.float64) / 255.0
-            
         pcd.colors = o3d.utility.Vector3dVector(colors)
     else:
-        # Paint uniform blue if no colors provided
         pcd.paint_uniform_color([0.1, 0.1, 0.7])
 
-    # 3. Create Camera/Origin Marker
-    # Instead of a single point, we draw a Coordinate Frame (Red=X, Green=Y, Blue=Z)
-    # The 'size' parameter adjusts how big the axes look relative to your cloud
-    avg_span = np.abs(pts_3D.max() - pts_3D.min()) * 0.1
-    camera_marker = o3d.geometry.TriangleMesh.create_coordinate_frame(
-        size=avg_span, origin=[0, 0, 0]
-    )
-
-    # 4. Visualization Settings
-    # We create a visualization window with the point cloud and the origin
-    print(f"[{title}] Opening visualizer...")
-    print("Controls:\n  [Left Click + Drag]: Rotate\n  [Scroll Wheel]: Zoom\n  [Right Click + Drag]: Pan\n  [+/-]: Increase/Decrease point size")
+    # 3. Create Better Camera Markers (Spheres)
+    camera_markers = []
     
+    # Calculate scale: 2% of the scene size looks usually good for markers
+    if len(points_3D) > 0:
+        extent = points_3D.max(axis=0) - points_3D.min(axis=0)
+        marker_size = np.linalg.norm(extent) * 0.002 
+    else:
+        marker_size = 0.5
+
+    for cam_pos in camera_positions:
+        # Use the helper function here
+        marker = create_camera_marker(cam_pos, size=marker_size, color=[1, 0, 0]) # Red cameras
+        camera_markers.append(marker)
+
+    return pcd, camera_markers
+
+def plot_point_cloud(camera_positions, pts_3D, colors=None, title="3D Point Cloud"):
+    pcd, camera_markers = create_point_cloud(camera_positions, pts_3D, colors)
+    
+    # Flatten the list: [PointCloud] + [Marker1, Marker2, ...]
+    geometries = [pcd] + camera_markers
+
     o3d.visualization.draw_geometries(
-        [pcd, camera_marker],
+        geometries,
         window_name=title,
         width=1280,
         height=720,
         left=50,
         top=50,
-        point_show_normal=False
+        point_show_normal=False 
     )
 
+def save_point_cloud_to_file(camera_positions, pts_3D, colors=None, filename="point_cloud.ply"):
+    pcd, camera_markers = create_point_cloud(camera_positions, pts_3D, colors)
+    
+    # Save the point cloud to a file
+    o3d.io.write_point_cloud(filename, pcd)
+    print(f"Point cloud saved to {filename}")
 
 def find_rotation_translation(K, ptsA, ptsB):
     F, inlier_mask = cv2.findFundamentalMat(
         ptsA, ptsB, 
         method=cv2.FM_RANSAC, 
-        ransacReprojThreshold=3, # Reprojection error threshold in pixels
+        ransacReprojThreshold=1, # Reprojection error threshold in pixels
         confidence=0.99
     )
     
@@ -233,7 +250,7 @@ def find_rotation_translation(K, ptsA, ptsB):
         cameraMatrix=K, 
         method=cv2.RANSAC, 
         prob=0.99, 
-        threshold=3
+        threshold=1
     )
     
     if E is None:
@@ -265,7 +282,7 @@ def find_3D_points(K, R, T, ptsA, ptsB):
 
     return pts_3D
 
-def find_matching_features(ptsA, ptsB, threshold=2.0):
+def find_matching_features(ptsA, ptsB, threshold=1.0):
     """
     Finds pairs of points (i, j) where distance(ptsA[i], ptsB[j]) < threshold.
     Optimized using cKDTree.
@@ -341,7 +358,7 @@ def structure_from_motion(images, correspondences_graph, K):
                 None,
                 reprojectionError=8.0,
                 confidence=0.99,
-                iterationsCount=100
+                iterationsCount=200
             )
             t = t.flatten()
             Rs.append(rvec.reshape(3))
@@ -349,13 +366,15 @@ def structure_from_motion(images, correspondences_graph, K):
             R = cv2.Rodrigues(rvec)[0]
 
             # Add correspondences for existing points
+            matching_idx = [(idxA, idxB) for j, (idxA, idxB) in enumerate(matching_idx) if j in inliers.flatten()]
             existing_idx = set([idxB for idxA, idxB in matching_idx])
-            # for idxA, idxB in matching_idx:
-            #     pt_3D = ptsA_3d_points[idxA]
-            #     pt_3D_idx = ptsA_3d_idx[idxA]
-            #     pt_2D = ptsB_inliers[idxB]
-            #     pt_2D_idx = inlier_idx[idxB]
-            #     points_mapping.append((i, pt_2D_idx, pt_3D_idx, pt_2D[0], pt_2D[1], pt_3D[0], pt_3D[1], pt_3D[2]))
+            # Problem loop
+            for idxA, idxB in matching_idx:
+                pt_3D = ptsA_3d_points[idxA]
+                pt_3D_idx = ptsA_3d_idx[idxA]
+                pt_2D = ptsB_inliers[idxB]
+                pt_2D_idx = inlier_idx[idxB]
+                points_mapping.append((i, pt_2D_idx, pt_3D_idx, pt_2D[0], pt_2D[1], pt_3D[0], pt_3D[1], pt_3D[2]))
 
             # Remove points with existing 3d coordinates
             inlier_idx = [idx for j, idx in enumerate(inlier_idx) if j not in existing_idx]
@@ -383,3 +402,78 @@ def structure_from_motion(images, correspondences_graph, K):
             print(f"Image {i}: {len(ptsA_inliers) - bad_points} new 3D points added. Bad points: {bad_points}")
 
     return Rs, ts, all_pts_3d, colors, points_mapping
+
+def create_panorama(images, points):
+    # --- STEP 1: Stitch Images and Map Points ---
+    stitcher = cv2.Stitcher.create(cv2.Stitcher_PANORAMA)
+    status, stitched = stitcher.stitch(images)
+
+    if status != cv2.Stitcher_OK:
+        print("Stitching failed.")
+        return None, None
+
+    modified_points = []
+    
+    # --- STEP 2: Map Points Using Homography ---
+    if len(points) > 0:
+        # 1. Detect features
+        sift = cv2.SIFT_create()
+        kp1, des1 = sift.detectAndCompute(images[0], None)
+        kp_pano, des_pano = sift.detectAndCompute(stitched, None)
+        
+        # 2. Match features
+        bf = cv2.BFMatcher()
+        matches = bf.knnMatch(des1, des_pano, k=2)
+        
+        # 3. Filter good matches (Lowe's ratio test)
+        good_matches = []
+        for m, n in matches:
+            if m.distance < 0.75 * n.distance:
+                good_matches.append(m)
+                
+        if len(good_matches) > 4:
+            # 4. Find Homography Matrix
+            src_pts = np.float32([kp1[m.queryIdx].pt for m in good_matches]).reshape(-1, 1, 2)
+            dst_pts = np.float32([kp_pano[m.trainIdx].pt for m in good_matches]).reshape(-1, 1, 2)
+            
+            M, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 5.0)
+            
+            # 5. Transform the user's points using this matrix
+            # Reshape points to (N, 1, 2) for perspectiveTransform
+            points_np = np.array(points, dtype=np.float32).reshape(-1, 1, 2)
+            mapped_np = cv2.perspectiveTransform(points_np, M)
+            modified_points = mapped_np.reshape(-1, 2) # Back to (N, 2)
+        else:
+            print("Warning: Not enough matches to map points.")
+            modified_points = np.array(points) # Fallback to original
+
+    # --- STEP 3: Adjust Stitched Image Aspect Ratio ---
+    height, width = stitched.shape[:2]
+    offset_y = 0 # Track how much the image shifts
+    
+    if height > width // 2:
+        # Decrease height (Crop from center)
+        new_height = width // 2
+        start_row = (height - new_height) // 2
+        
+        stitched = stitched[start_row : start_row + new_height, :]
+        
+        # Coordinate Fix: The image moved UP, so points move UP (negative Y)
+        offset_y = -start_row
+        
+    else:
+        # Pad black borders (Add to top/bottom)
+        new_height = width // 2
+        pad_size = (new_height - height) // 2
+        
+        stitched = cv2.copyMakeBorder(stitched, pad_size, pad_size, 0, 0, 
+                                      cv2.BORDER_CONSTANT, value=[0, 0, 0])
+        
+        # Coordinate Fix: The image moved DOWN, so points move DOWN (positive Y)
+        offset_y = pad_size
+
+    # Apply the offset to our calculated points
+    if len(modified_points) > 0:
+        modified_points[:, 1] += offset_y
+
+    return stitched, modified_points
