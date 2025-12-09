@@ -140,6 +140,18 @@ for i, img in enumerate(images):
 
     cv2.imwrite(f'results/image_{i}_with_points_and_cameras.png', copy)
 
+# Camera location and respective images json
+camera_locations_results = []
+for i in range(len(images)):
+    camera_locations_results.append({
+        'id': f'camera_{i}',
+        'image': f'./{image_paths[i]}',
+        'location': camera_positions[i].tolist(),
+        'R': cv2.Rodrigues(Rs[i])[0].tolist(),
+        't': ts[i].tolist(),
+        'K': K.tolist()
+    })
+
 # Panorama stitching
 print("Starting panorama stitching...")
 panorama_results = []
@@ -180,4 +192,7 @@ for i in range(len(panoramas)):
 with open('results/panorama_results.js', 'w') as f:
     f.write("const panoramaResults = ")
     f.write(json.dumps(panorama_results))
-    f.write(";")
+    f.write(";\n")
+    f.write("const cameraLocations = ")
+    f.write(json.dumps(camera_locations_results))
+    f.write(";\n")
