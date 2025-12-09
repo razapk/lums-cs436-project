@@ -8,6 +8,7 @@
         #tooltip {
             position: absolute; background: white; padding: 5px; 
             border-radius: 4px; display: none; pointer-events: none;
+            font-family: sans-serif;
         }
     </style>
     <script type="importmap">
@@ -26,7 +27,6 @@
         import { OrbitControls } from 'https://cdn.jsdelivr.net/npm/three@0.157.0/examples/jsm/controls/OrbitControls.js';
 
         // --- CONFIGURATION ---
-        // Define your spots. Each spot has a texture and a list of links to other spots.
         const tourData = {};
         for (const panorama of panoramaResults) {
             const links = panorama.links.map(link => {
@@ -52,25 +52,23 @@
 
         // --- SETUP ---
         const scene = new THREE.Scene();
-        const camera = new THREE.PerspectiveCamera(50, 16/  9, 0.1, 2000);
-        camera.position.set(0.1, 0, 0); // Offset slightly to allow OrbitControls to work inside sphere
+        // FOV 50 is our "Normal" view
+        const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 1, 2000);
+        camera.position.set(0.1, 0, 0); 
 
         const renderer = new THREE.WebGLRenderer();
         renderer.setSize(window.innerWidth, window.innerHeight);
         document.body.appendChild(renderer.domElement);
 
         const controls = new OrbitControls(camera, renderer.domElement);
-        controls.enableZoom = true; // Enable zoom for better navigation
-        controls.minDistance = 10; // Minimum zoom distance
-        controls.maxDistance = 100; // Maximum zoom distance
-        controls.rotateSpeed = -0.5; // Invert drag for "dragging the scene" feel
+        // FIX 1: Disable physical distance zoom (which distorts panoramas)
+        controls.enableZoom = false; 
+        controls.rotateSpeed = -0.5; 
 
         // --- THE DOME (360 Sphere) ---
         const geometry = new THREE.SphereGeometry(50, 60, 40);
-        // Flip the geometry inside out so we see the texture from the inside
         geometry.scale(-1, 1, 1); 
         
-        // Create two spheres for crossfading
         const material1 = new THREE.MeshBasicMaterial({ map: null, transparent: true, opacity: 1 });
         const material2 = new THREE.MeshBasicMaterial({ map: null, transparent: true, opacity: 0 });
         const sphere1 = new THREE.Mesh(geometry, material1);
@@ -81,23 +79,36 @@
         let activeSphere = sphere1;
         let inactiveSphere = sphere2;
 
-        // --- HOTSPOTS (Navigation arrows) ---
+        // --- HOTSPOTS ---
         const hotspots = [];
         const raycaster = new THREE.Raycaster();
         const mouse = new THREE.Vector2();
         const tooltip = document.getElementById('tooltip');
         
-        // Transition state
         let isTransitioning = false;
-        const transitionDuration = 1200; // milliseconds
+        const transitionDuration = 1200; 
+
+        // --- FIX 2: Custom "Deep Zoom" Handler ---
+        // This changes FOV instead of camera position
+        window.addEventListener('wheel', (event) => {
+            const fovSpeed = 0.05;
+            // Adjust FOV based on scroll
+            camera.fov += event.deltaY * fovSpeed;
+            
+            // Clamp FOV:
+            // 10 = Very deep zoom (telescope)
+            // 80 = Wide angle
+            camera.fov = Math.max(10, Math.min(80, camera.fov));
+            
+            camera.updateProjectionMatrix();
+        });
 
         function loadScene(sceneId) {
-            if (isTransitioning) return; // Prevent double transitions
+            if (isTransitioning) return; 
             isTransitioning = true;
             
             const data = tourData[sceneId];
             
-            // Load new texture into inactive sphere first
             const loader = new THREE.TextureLoader();
             loader.load(data.texture, (texture) => {
                 texture.minFilter = THREE.LinearFilter;
@@ -106,7 +117,6 @@
                 inactiveSphere.material.map = texture;
                 inactiveSphere.material.needsUpdate = true;
                 
-                // Start crossfade and zoom transition
                 startTransition(data);
             });
             
@@ -116,13 +126,16 @@
         function startTransition(data) {
             const startTime = performance.now();
             const initialZoom = camera.position.length();
-            const targetZoom = 25; // Zoom in during transition
-            
-            // Clear old hotspots
+            const targetZoom = 25; 
+
+            // FIX 3: Reset FOV to normal (50) when starting a transition
+            // This ensures the "Warp Speed" effect looks consistent
+            camera.fov = 50;
+            camera.updateProjectionMatrix();
+
             hotspots.forEach(h => scene.remove(h));
             hotspots.length = 0;
             
-            // Create new hotspots (initially invisible)
             const newHotspots = [];
             data.links.forEach(link => {
                 const markerGeo = new THREE.SphereGeometry(1, 16, 16);
@@ -132,41 +145,33 @@
                     opacity: 0 
                 });
                 const marker = new THREE.Mesh(markerGeo, markerMat);
-                
                 marker.position.copy(link.position);
                 marker.userData = { target: link.target, label: link.label };
-                
                 scene.add(marker);
                 newHotspots.push(marker);
             });
             
-            function animate(currentTime) {
+            function animateTransition(currentTime) {
                 const elapsed = currentTime - startTime;
                 const progress = Math.min(elapsed / transitionDuration, 1);
                 
-                // Smooth easing function (ease-in-out)
                 const eased = progress < 0.5 
                     ? 2 * progress * progress 
                     : 1 - Math.pow(-2 * progress + 2, 2) / 2;
                 
-                // Crossfade between spheres
                 activeSphere.material.opacity = 1 - eased;
                 inactiveSphere.material.opacity = eased;
                 
-                // Zoom animation (zoom in then out)
                 let zoomProgress;
                 if (progress < 0.5) {
-                    // Zoom in first half
                     const halfProgress = progress * 2;
                     zoomProgress = initialZoom + (targetZoom - initialZoom) * halfProgress;
                 } else {
-                    // Zoom out second half
                     const halfProgress = (progress - 0.5) * 2;
                     zoomProgress = targetZoom + (initialZoom - targetZoom) * halfProgress;
                 }
                 camera.position.setLength(zoomProgress);
                 
-                // Fade in new hotspots in second half of transition
                 if (progress > 0.5) {
                     const hotspotProgress = (progress - 0.5) * 2;
                     newHotspots.forEach(h => {
@@ -175,21 +180,17 @@
                 }
                 
                 if (progress < 1) {
-                    requestAnimationFrame(animate);
+                    requestAnimationFrame(animateTransition);
                 } else {
-                    // Swap active/inactive spheres
                     activeSphere.material.opacity = 0;
                     inactiveSphere.material.opacity = 1;
                     [activeSphere, inactiveSphere] = [inactiveSphere, activeSphere];
-                    
-                    // Update hotspots array
                     hotspots.push(...newHotspots);
-                    
                     isTransitioning = false;
                 }
             }
             
-            requestAnimationFrame(animate);
+            requestAnimationFrame(animateTransition);
         }
 
         // --- INTERACTION ---
@@ -224,6 +225,13 @@
                 tooltip.style.display = 'none';
             }
         }
+
+        // Handle Window Resize
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
 
         window.addEventListener('click', onMouseClick);
         window.addEventListener('mousemove', onMouseMove);
