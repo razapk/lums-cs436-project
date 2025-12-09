@@ -145,7 +145,7 @@ for i, img in enumerate(images):
         # Project camera center
         cam2d = K @ (R @ camera_positions[j].reshape(3, 1) + t)
         cam2d = cam2d.flatten()
-        if cam2d[2] <= 0:
+        if cam2d[2] <= 1e-6:
             camera_object['other_cameras'].append({
                 'id': f'camera_{j}',
                 'visible': False
