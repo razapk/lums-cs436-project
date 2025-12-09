@@ -3,61 +3,85 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Three.js Point Cloud with Camera Transition</title>
+    <title>Three.js Virtual Tour with Navigation</title>
     <style>
         body { margin: 0; overflow: hidden; background-color: #111; }
         canvas { display: block; }
         
-        /* Information Overlay */
         #info {
-            position: absolute;
-            top: 10px;
-            width: 100%;
-            text-align: center;
-            color: white;
-            font-family: sans-serif;
-            pointer-events: none;
-            z-index: 1;
+            position: absolute; top: 10px; width: 100%;
+            text-align: center; color: white; font-family: sans-serif;
+            pointer-events: none; z-index: 1;
         }
 
-        /* Image Overlay (Hidden by default) */
+        /* Full Screen Overlay */
         #image-overlay {
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background: rgba(0, 0, 0, 0.9);
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0, 0, 0, 0.95);
             display: none; /* Hidden initially */
-            justify-content: center;
-            align-items: center;
-            flex-direction: column;
+            justify-content: center; align-items: center; flex-direction: column;
             z-index: 10;
-            opacity: 0;
-            transition: opacity 0.5s ease;
+            opacity: 0; transition: opacity 0.5s ease;
         }
 
-        #image-overlay img {
+        /* Container for Image + Markers */
+        /* We need this relative wrapper to position markers on top of the image */
+        #view-container {
+            position: relative;
             max-width: 90%;
             max-height: 80%;
-            border: 2px solid white;
-            box-shadow: 0 0 20px rgba(255,255,255,0.2);
+            box-shadow: 0 0 30px rgba(0,0,0,0.8);
         }
+
+        #camera-view {
+            display: block;
+            width: 100%;
+            height: auto;
+            max-height: 80vh; /* Limit height to viewport */
+            border: 2px solid #333;
+        }
+
+        /* The Clickable Navigation Dots */
+        .nav-marker {
+            position: absolute;
+            width: 20px; height: 20px;
+            background: rgba(255, 255, 255, 0.3); /* Semi-transparent white */
+            border: 2px solid white;
+            border-radius: 50%;
+            transform: translate(-50%, -50%); /* Center on coordinate */
+            cursor: pointer;
+            transition: all 0.2s ease;
+            z-index: 20;
+            box-shadow: 0 0 5px rgba(0,0,0,0.5);
+        }
+
+        .nav-marker:hover {
+            background: rgba(0, 255, 100, 0.8); /* Green on hover */
+            transform: translate(-50%, -50%) scale(1.5);
+            box-shadow: 0 0 15px #00ff66;
+        }
+
+        /* Tooltip for marker IDs */
+        .nav-marker::after {
+            content: attr(data-id);
+            position: absolute;
+            bottom: 25px; left: 50%; transform: translateX(-50%);
+            background: rgba(0,0,0,0.8); color: white;
+            padding: 4px 8px; border-radius: 4px;
+            font-size: 12px; white-space: nowrap;
+            opacity: 0; pointer-events: none;
+            transition: opacity 0.2s;
+        }
+        .nav-marker:hover::after { opacity: 1; }
 
         #close-btn {
-            margin-top: 20px;
-            padding: 10px 20px;
-            background: white;
-            color: black;
-            border: none;
-            cursor: pointer;
-            font-size: 16px;
-            border-radius: 5px;
-            font-family: sans-serif;
+            margin-top: 20px; padding: 10px 25px;
+            background: rgba(255,255,255,0.1); color: white; border: 1px solid white;
+            cursor: pointer; font-size: 14px; border-radius: 4px;
+            transition: background 0.2s;
         }
-        #close-btn:hover { background: #ddd; }
+        #close-btn:hover { background: rgba(255,255,255,0.3); }
 
-        /* Cursor pointer when hovering over clickable cameras */
         body.hovering-camera { cursor: pointer; }
     </style>
     
@@ -75,8 +99,10 @@
     <div id="info">Loading Point Cloud...</div>
 
     <div id="image-overlay">
-        <img id="camera-view" src="" alt="Camera View">
-        <button id="close-btn">Close View</button>
+        <div id="view-container">
+            <img id="camera-view" src="" alt="Camera View">
+            <div id="marker-layer"></div> </div>
+        <button id="close-btn">Return to 3D View</button>
     </div>
 
     <script src="results/panorama_results.js" type="application/javascript"></script>
@@ -90,253 +116,244 @@
         // --- GLOBAL VARIABLES ---
         let cameraOffset = new THREE.Vector3(); 
         const cameraMarkers = []; 
-        
-        // Group to hold the point cloud AND the cameras
-        // This ensures they rotate/scale together perfectly
         const worldGroup = new THREE.Group(); 
+        
+        // Fast lookup map to find camera data by ID (key: id, value: {data, mesh})
+        const cameraMap = new Map(); 
 
         // 1. Scene Setup
         const scene = new THREE.Scene();
         scene.background = new THREE.Color(0x111111);
         
-        // 2. Camera Setup
         const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-        camera.position.set(0, 2, 4); // Initial view
+        camera.position.set(0, 5, 10);
 
-        // 3. Renderer Setup
         const renderer = new THREE.WebGLRenderer({ antialias: true });
         renderer.setSize(window.innerWidth, window.innerHeight);
         renderer.setPixelRatio(window.devicePixelRatio);
         document.body.appendChild(renderer.domElement);
 
-        // 4. Controls
         const controls = new OrbitControls(camera, renderer.domElement);
         controls.enableDamping = true;
 
-        // 5. Raycaster
         const raycaster = new THREE.Raycaster();
         const mouse = new THREE.Vector2();
 
-        // 6. Setup World Group (Apply your global rotations here)
         scene.add(worldGroup);
         worldGroup.rotation.x = -Math.PI;
         worldGroup.rotation.y = -0.6;
 
-        // Grid (Optional: Add to group so it rotates with world, or scene to stay static)
-        const gridHelper = new THREE.GridHelper(20, 20, 0x444444, 0x222222);
-        // scene.add(gridHelper); // Uncomment to see static ground
-
-        // 7. Load PLY
+        // 2. Load PLY
         const loader = new PLYLoader();
         loader.load('./results/point_cloud_after_ba.ply', function (geometry) {
-
-            // A. Center Geometry
             geometry.computeBoundingSphere();
             const center = geometry.boundingSphere.center;
             cameraOffset.copy(center).multiplyScalar(-1); 
             geometry.translate(cameraOffset.x, cameraOffset.y, cameraOffset.z);
 
-            // B. Create Point Cloud
-            const hasVertexColors = geometry.hasAttribute('color');
             const material = new THREE.PointsMaterial({
                 size: 0.05,
-                vertexColors: hasVertexColors,
-                color: hasVertexColors ? 0xffffff : 0x00ff00,
+                vertexColors: geometry.hasAttribute('color'),
             });
 
             const pointCloud = new THREE.Points(geometry, material);
-            worldGroup.add(pointCloud); // Add to the group, not scene directly
+            worldGroup.add(pointCloud);
 
-            document.getElementById('info').innerText = "Loaded. Click red spheres to view photos.";
+            document.getElementById('info').innerText = "Loaded. Click red spheres or use image navigation.";
             
-            // C. Initialize Cameras with Matrix Precision
             initPreciseCameras();
 
-        }, undefined, (error) => {
-            console.error(error);
-            document.getElementById('info').innerText = "Error loading PLY.";
-        });
+        }, undefined, (err) => document.getElementById('info').innerText = "Error loading PLY.");
 
-        // --- MATH HELPER: Convert CV Matrix to Three.js Pose ---
+        // 3. Helper: Math for Cameras
         function getCameraPoseFromRt(R, t) {
-            // 1. Create a 4x4 Matrix from R (3x3) and t (3x1)
-            // Note: Three.js matrices are column-major, but we usually define them row-major
-            // The set() method takes arguments in row-major order (n11, n12, n13, n14...)
             const matrix = new THREE.Matrix4();
-            
             matrix.set(
                 R[0][0], R[0][1], R[0][2], t[0],
                 R[1][0], R[1][1], R[1][2], t[1],
                 R[2][0], R[2][1], R[2][2], t[2],
                 0,       0,       0,       1
             );
-            console.log(matrix);
-
-            // 2. Invert: CV Extrinsics are (World -> Camera). We need (Camera -> World).
             const pose = matrix.invert();
-
-            // 3. Coordinate System Swap
-            // CV: +Z Forward, +Y Down
-            // Three.js: -Z Forward, +Y Up
-            // We apply a scale(1, -1, -1) to flip Y and Z axes relative to the camera
-            const conversion = new THREE.Matrix4().makeScale(1, -1, -1);
-            pose.multiply(conversion);
-
+            pose.multiply(new THREE.Matrix4().makeScale(1, -1, -1)); // CV to Three.js conversion
             return pose;
         }
 
+        // 4. Initialize Cameras
         function initPreciseCameras() {
             const locations = cameraLocations || []; 
-
             if(locations.length === 0) return;
 
-            const markerGeo = new THREE.SphereGeometry(0.1, 16, 16);
+            const markerGeo = new THREE.SphereGeometry(0.15, 16, 16);
             const markerMat = new THREE.MeshBasicMaterial({ color: 0xff0000 });
-            const arrowHelperLen = 1.0;
 
             locations.forEach(data => {
-                // R and t are arrays in your JSON. 
-                // Example: R = [[r1,r2,r3],[r4...]], t = [t1,t2,t3]
                 if (data.R && data.t) {
-                    
-                    // 1. Calculate the precise Pose Matrix
                     const poseMatrix = getCameraPoseFromRt(data.R, data.t);
-
-                    // 2. Create the marker
                     const mesh = new THREE.Mesh(markerGeo, markerMat);
                     
-                    // 3. Apply the Pose (Rotation and Position)
                     mesh.applyMatrix4(poseMatrix);
-
-                    // 4. Apply the Point Cloud Centering Offset
-                    // Since the pose is absolute world coordinates, we simply add the offset
                     mesh.position.add(cameraOffset);
 
-                    // 5. Store Metadata
-                    mesh.userData = { 
-                        id: data.id, 
-                        image: data.image,
-                        // If 'k' (intrinsics) is present, we can use it to set FOV later
-                        k: data.k 
-                    };
+                    // Store full data object in mesh for easy access
+                    mesh.userData = data;
 
-                    // 6. Add to WorldGroup (inherits the -Math.PI rotation automatically)
                     worldGroup.add(mesh);
                     cameraMarkers.push(mesh);
 
-                    // OPTIONAL: Add a small arrow to visualize where the camera is looking
-                    // This helps debug if your rotation matrices are correct
-                    // const arrow = new THREE.ArrowHelper(new THREE.Vector3(0,0,-1), new THREE.Vector3(0,0,0), 0.5, 0xffff00);
-                    // mesh.add(arrow); 
-
-                } else {
-                    console.warn("Skipping camera missing R/t data:", data.id);
+                    // Add to map for ID lookup
+                    cameraMap.set(data.id, { data: data, mesh: mesh });
                 }
             });
         }
 
-        // --- INTERACTION ---
+        // --- INTERACTION: 3D Scene ---
         
         window.addEventListener('mousemove', (event) => {
             mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
             mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
-            
             raycaster.setFromCamera(mouse, camera);
+            
             const intersects = raycaster.intersectObjects(cameraMarkers);
             document.body.classList.toggle('hovering-camera', intersects.length > 0);
         });
 
         window.addEventListener('click', (event) => {
+            // Prevent 3D clicks if overlay is visible
             if(document.getElementById('image-overlay').style.display === 'flex') return;
 
             raycaster.setFromCamera(mouse, camera);
             const intersects = raycaster.intersectObjects(cameraMarkers);
 
             if (intersects.length > 0) {
+                // Start transition
                 enterCameraView(intersects[0].object);
             }
         });
 
+        // --- ANIMATION: Fly to Camera ---
         function enterCameraView(targetMesh) {
             controls.enabled = false;
 
-            // 1. Get exact Target Position & Rotation in World Space
-            // We must use getWorld... because the mesh is inside the rotated WorldGroup
+            // 1. Hide Overlay (if moving between images)
+            const overlay = document.getElementById('image-overlay');
+            overlay.style.opacity = '0';
+            
+            // 2. Get World Transform
             const targetPos = new THREE.Vector3();
             const targetQuat = new THREE.Quaternion();
-            
             targetMesh.getWorldPosition(targetPos);
             targetMesh.getWorldQuaternion(targetQuat);
 
-            // 2. Optional: Adjust FOV based on K matrix (if exists)
-            // FOV = 2 * atan( image_height / (2 * fy) )
-            // Assuming typical image aspect ratio, we can animate FOV too
-            // if (targetMesh.userData.k) {
-            //     const fy = targetMesh.userData.k[1][1];
-            //     const height = window.innerHeight; // Rough approximation
-            //     // Calculating exact FOV is tricky without original image dimensions
-            // }
-
-            // 3. Animate Position AND Rotation
+            // 3. GSAP Animation
             const timeline = gsap.timeline({
-                onComplete: () => showOverlay(targetMesh.userData.image)
+                onComplete: () => {
+                    // Show the overlay for this specific camera data
+                    showOverlay(targetMesh.userData);
+                }
             });
 
-            // Move Position
+            // Position
             timeline.to(camera.position, {
                 duration: 1.5,
-                x: targetPos.x,
-                y: targetPos.y,
-                z: targetPos.z,
+                x: targetPos.x, y: targetPos.y, z: targetPos.z,
                 ease: "power2.inOut"
             }, 0);
 
-            // Rotate Camera (We use a dummy object to interpolate quaternions cleanly)
+            // Rotation
             const startQuat = camera.quaternion.clone();
             const dummy = { t: 0 };
-            
             timeline.to(dummy, {
-                duration: 1.5,
-                t: 1,
-                ease: "power2.inOut",
-                onUpdate: () => {
-                    camera.quaternion.slerpQuaternions(startQuat, targetQuat, dummy.t);
-                }
+                duration: 1.5, t: 1, ease: "power2.inOut",
+                onUpdate: () => camera.quaternion.slerpQuaternions(startQuat, targetQuat, dummy.t)
             }, 0);
-            
-            // Ensure controls target is synced so you don't snap back when moving mouse later
-            // We set the orbit target to a point slightly in front of the camera
+
+            // Orbit Target (Look slightly forward)
             const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(targetQuat);
             const lookTarget = targetPos.clone().add(forward);
-            
             gsap.to(controls.target, {
                 duration: 1.5,
-                x: lookTarget.x,
-                y: lookTarget.y,
-                z: lookTarget.z
+                x: lookTarget.x, y: lookTarget.y, z: lookTarget.z
             }, 0);
         }
 
-        // --- OVERLAY LOGIC (Same as before) ---
+        // --- OVERLAY: Image & Navigation Logic ---
+        
         const overlay = document.getElementById('image-overlay');
         const overlayImg = document.getElementById('camera-view');
+        const markerLayer = document.getElementById('marker-layer');
         const closeBtn = document.getElementById('close-btn');
 
-        function showOverlay(url) {
-            overlayImg.src = url;
+        function showOverlay(cameraData) {
+            overlayImg.src = cameraData.image;
+            
+            // Clear old markers
+            markerLayer.innerHTML = ''; 
+
+            // IMPORTANT: Wait for image to load to get dimensions for positioning
+            overlayImg.onload = () => {
+                renderNavigationMarkers(cameraData, overlayImg.naturalWidth, overlayImg.naturalHeight);
+            };
+
+            // If image is cached/already loaded, trigger immediately
+            if (overlayImg.complete && overlayImg.naturalWidth > 0) {
+                 renderNavigationMarkers(cameraData, overlayImg.naturalWidth, overlayImg.naturalHeight);
+            }
+
             overlay.style.display = 'flex';
             setTimeout(() => overlay.style.opacity = '1', 50);
         }
 
+        function renderNavigationMarkers(cameraData, imgWidth, imgHeight) {
+            if (!cameraData.other_cameras) return;
+
+            cameraData.other_cameras.forEach(other => {
+                // Ensure the camera is marked as visible and we have its ID in our scene
+                if (other.visible && cameraMap.has(other.id)) {
+                    
+                    // Convert Pixel Coordinates to Percentage (Responsive)
+                    // The CSS container is relative, so left: 50% puts it in the middle regardless of screen size
+                    const leftPct = (other.pixel_location[0] / imgWidth) * 100;
+                    const topPct = (other.pixel_location[1] / imgHeight) * 100;
+
+                    const marker = document.createElement('div');
+                    marker.className = 'nav-marker';
+                    marker.style.left = `${leftPct}%`;
+                    marker.style.top = `${topPct}%`;
+                    marker.dataset.id = other.id; // For tooltip
+
+                    // Interaction: Click to fly to next camera
+                    marker.addEventListener('click', (e) => {
+                        e.stopPropagation(); // Prevent bubbling
+                        navigateToNextCamera(other.id);
+                    });
+
+                    markerLayer.appendChild(marker);
+                }
+            });
+        }
+
+        function navigateToNextCamera(targetId) {
+            const target = cameraMap.get(targetId);
+            if (target) {
+                // Trigger the full 3D transition logic
+                // This fades out current overlay, flies camera, fades in new overlay
+                enterCameraView(target.mesh);
+            }
+        }
+
+        // Close Button Logic
         closeBtn.addEventListener('click', () => {
             overlay.style.opacity = '0';
             setTimeout(() => {
                 overlay.style.display = 'none';
+                overlayImg.src = '';
+                markerLayer.innerHTML = '';
                 controls.enabled = true;
             }, 500);
         });
 
-        // Resize & Animate Loop
+        // Resize Loop
         window.addEventListener('resize', () => {
             camera.aspect = window.innerWidth / window.innerHeight;
             camera.updateProjectionMatrix();
@@ -349,7 +366,7 @@
             renderer.render(scene, camera);
         }
         animate();
-    </script>
 
+    </script>
 </body>
 </html>

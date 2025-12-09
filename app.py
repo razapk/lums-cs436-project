@@ -124,33 +124,52 @@ print("Saved point cloud after bundle adjustment to results/point_cloud_after_ba
 
 # Plot point and camera locations in each image
 print("Plotting trajectory on images...")
+camera_locations_results = []
 for i, img in enumerate(images):
     copy = img.copy()
-    for j in range(len(Rs)):
-        if j == i:
-            continue
-        # Project camera center
-        cam2d = K @ (cv2.Rodrigues(Rs[i])[0] @ camera_positions[j, :] + ts[i])
-        if cam2d[2] <= 0:
-            continue
-        cam2d /= cam2d[2]
-        if np.isnan(cam2d).any() or np.isinf(cam2d).any():
-            continue
-        cv2.circle(copy, (int(cam2d[0]), int(cam2d[1])), 15, (0, 0, 255), -1)
-
-    cv2.imwrite(f'results/image_{i}_with_points_and_cameras.png', copy)
-
-# Camera location and respective images json
-camera_locations_results = []
-for i in range(len(images)):
-    camera_locations_results.append({
+    R = cv2.Rodrigues(Rs[i])[0]
+    t = ts[i].reshape(3, 1)
+    camera_object = {
         'id': f'camera_{i}',
         'image': f'./{image_paths[i]}',
         'location': camera_positions[i].tolist(),
-        'R': cv2.Rodrigues(Rs[i])[0].tolist(),
-        't': ts[i].tolist(),
-        'K': K.tolist()
-    })
+        'R': R.tolist(),
+        't': t.tolist(),
+        'K': K.tolist(),
+        'width': img.shape[1],
+        'height': img.shape[0],
+        'other_cameras': []
+    }
+
+    for j in range(len(Rs)):
+        # Project camera center
+        cam2d = K @ (R @ camera_positions[j].reshape(3, 1) + t)
+        cam2d = cam2d.flatten()
+        if cam2d[2] <= 0:
+            camera_object['other_cameras'].append({
+                'id': f'camera_{j}',
+                'visible': False
+            })
+            continue
+        cam2d /= cam2d[2]
+        if np.isnan(cam2d).any() or np.isinf(cam2d).any():
+            print(f"Warning: Invalid projection for camera {j} in image {i}. Skipping.")                
+            continue
+        if cam2d[0] < 0 or cam2d[0] >= img.shape[1] or cam2d[1] < 0 or cam2d[1] >= img.shape[0]:
+            camera_object['other_cameras'].append({
+                'id': f'camera_{j}',
+                'visible': False
+            })
+            continue
+        camera_object['other_cameras'].append({
+            'id': f'camera_{j}',
+            'visible': True,
+            'pixel_location': [float(cam2d[0]), float(cam2d[1])]
+        })
+        cv2.circle(copy, (int(cam2d[0]), int(cam2d[1])), 15, (0, 0, 255), -1)
+        
+    camera_locations_results.append(camera_object)
+    cv2.imwrite(f'results/image_{i}_with_points_and_cameras.png', copy)
 
 # Panorama stitching
 print("Starting panorama stitching...")
