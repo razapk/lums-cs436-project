@@ -48,6 +48,7 @@ print("Loaded correspondences from files.")
 K = compute_intrinsics_from_exif(image_paths[0])
 print("Computing structure from motion...")
 Rs, ts, points_3d, colors, points_mapping = structure_from_motion(images, correspondence_graph, K)
+print(f"Reconstructed {len(points_3d)} 3D points from {len(images)} images.")
 
 # Save results
 points_3d = np.array(points_3d)

@@ -32,7 +32,7 @@ def detect_and_match_sift(img1, img2):
 
     return points1, points2, good_matches, kp1, kp2
 
-def show_correspondences(img1, img2, pts1, pts2, title="Feature Correspondences"):
+def show_correspondences(img1, img2, pts1, pts2, inlier_idx=None, title="Feature Correspondences"):
     # Ensure inputs are numpy arrays
     pts1, pts2 = np.array(pts1), np.array(pts2)
 
@@ -51,10 +51,24 @@ def show_correspondences(img1, img2, pts1, pts2, title="Feature Correspondences"
     plt.title(title)
 
     # Draw correspondences
-    for (x1, y1), (x2, y2) in zip(pts1, pts2):
-        plt.plot([x1, x2 + w1], [y1, y2], 'r-', linewidth=1)
-        plt.plot(x1, y1, 'go', markersize=5)
-        plt.plot(x2 + w1, y2, 'bo', markersize=5)
+    for idx, ((x1, y1), (x2, y2)) in enumerate(zip(pts1, pts2)):
+        if inlier_idx is None or idx in inlier_idx:
+            continue
+        else:
+            # Outliers: red
+            plt.plot([x1, x2 + w1], [y1, y2], 'r-', linewidth=1)
+            plt.plot(x1, y1, 'ro', markersize=5)
+            plt.plot(x2 + w1, y2, 'ro', markersize=5)
+
+    # Draw correspondences
+    for idx, ((x1, y1), (x2, y2)) in enumerate(zip(pts1, pts2)):
+        if inlier_idx is None or idx in inlier_idx:
+            # Inliers: green/blue
+            plt.plot([x1, x2 + w1], [y1, y2], 'g-', linewidth=1)
+            plt.plot(x1, y1, 'go', markersize=5)
+            plt.plot(x2 + w1, y2, 'bo', markersize=5)
+        else:
+            continue
 
     plt.tight_layout()
     plt.show()
@@ -224,11 +238,11 @@ def save_point_cloud_to_file(camera_positions, pts_3D, colors=None, filename="po
     o3d.io.write_point_cloud(filename, pcd)
     print(f"Point cloud saved to {filename}")
 
-def find_rotation_translation(K, ptsA, ptsB):
+def find_rotation_translation(K, ptsA, ptsB, threshold=1):
     F, inlier_mask = cv2.findFundamentalMat(
         ptsA, ptsB, 
         method=cv2.FM_RANSAC, 
-        ransacReprojThreshold=1, # Reprojection error threshold in pixels
+        ransacReprojThreshold=threshold, # Reprojection error threshold in pixels
         confidence=0.99
     )
     
@@ -250,7 +264,7 @@ def find_rotation_translation(K, ptsA, ptsB):
         cameraMatrix=K, 
         method=cv2.RANSAC, 
         prob=0.99, 
-        threshold=1
+        threshold=threshold
     )
     
     if E is None:
@@ -306,7 +320,7 @@ def find_matching_features(ptsA, ptsB, threshold=1.0):
 
     return matches
 
-def structure_from_motion(images, correspondences_graph, K):
+def structure_from_motion(images, correspondences_graph, K, max_distance=3):
     Rs = [np.zeros((3))]
     ts = [np.zeros(3)]
     all_pts_3d = []
@@ -315,9 +329,9 @@ def structure_from_motion(images, correspondences_graph, K):
 
     for i in range(1, len(images)):
         ptsA, ptsB = correspondences_graph[i - 1][i]
-        inlier_idx, R, t = find_rotation_translation(K, ptsA, ptsB)
 
         if i == 1:
+            inlier_idx, R, t = find_rotation_translation(K, ptsA, ptsB, 1)
             ptsA_inliers = ptsA[inlier_idx]
             ptsB_inliers = ptsB[inlier_idx]
             pts_3D = find_3D_points(K, R, t, ptsA_inliers, ptsB_inliers)
@@ -340,6 +354,8 @@ def structure_from_motion(images, correspondences_graph, K):
             print(f"Image {i}: {len(pts_3D)} 3D points added from first image pair.")
 
         else:
+            inlier_idx, R, t = find_rotation_translation(K, ptsA, ptsB, 3)
+            print(f"Image {i}: {len(inlier_idx)} / {len(ptsA)} inliers found for pose estimation.")
             ptsA_inliers = ptsA[inlier_idx]
             ptsB_inliers = ptsB[inlier_idx]
             ptsA_records = [record for record in points_mapping if record[0] == i - 1]
@@ -356,9 +372,9 @@ def structure_from_motion(images, correspondences_graph, K):
                 np.array(ptsB_2d_points_filtered),
                 K,
                 None,
-                reprojectionError=8.0,
+                reprojectionError=1,
                 confidence=0.99,
-                iterationsCount=200
+                iterationsCount=1000
             )
             t = t.flatten()
             Rs.append(rvec.reshape(3))
@@ -386,8 +402,13 @@ def structure_from_motion(images, correspondences_graph, K):
             for j in range(len(ptsA_inliers)):
                 P1 = K @ np.hstack((cv2.Rodrigues(Rs[i - 1])[0], ts[i - 1].reshape(3, 1)))
                 P2 = K @ np.hstack((cv2.Rodrigues(Rs[i])[0], ts[i].reshape(3, 1)))
-                pt_3D = triangulate_dlt(P1, P2, ptsA_inliers[j], ptsB_inliers[j])
+                pt_3D = triangulate_dlt(P1, P2, ptsA_inliers[j], ptsB_inliers[j], 10)
                 if pt_3D is None:
+                    bad_points += 1
+                    continue
+
+                distance = np.linalg.norm(pt_3D - ts[i])
+                if distance > max_distance:
                     bad_points += 1
                     continue
 
