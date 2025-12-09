@@ -9,7 +9,7 @@ This project implements 3D reconstruction and panorama stitching using state-of-
 ## Live Demos
 - **3D Point Cloud Visualization:** [View Demo](https://razapk.github.io/lums-cs436-project/point-cloud.html)
 - **Panorama Tour:** [Explore Tour](https://razapk.github.io/lums-cs436-project/home.html)
-- **Video Demonstration:** [Watch on YouTube](https://youtu.be/gCfUx9n_0WM)
+- **Video Demonstration:** [Watch on YouTube](https://youtu.be/j2iS7yUAda0)
 
 ## Getting Started
 
