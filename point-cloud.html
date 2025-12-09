@@ -11,7 +11,7 @@
         #info {
             position: absolute; top: 10px; width: 100%;
             text-align: center; color: white; font-family: sans-serif;
-            pointer-events: none; z-index: 1;
+            z-index: 1;
         }
 
         /* Full Screen Overlay */
@@ -159,8 +159,8 @@
             const pointCloud = new THREE.Points(geometry, material);
             worldGroup.add(pointCloud);
 
-            document.getElementById('info').innerText = "Loaded. Click red spheres or use image navigation.";
-            
+            document.getElementById('info').innerHTML = "Click red spheres or use image navigation. Double-click point cloud to jump to best view. <a href='./home.html' style='color: #0000ff;'>Go to Panorama Tour</a>";
+
             initPreciseCameras();
 
         }, undefined, (err) => document.getElementById('info').innerText = "Error loading PLY.");

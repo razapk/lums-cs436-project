@@ -10,6 +10,11 @@
             border-radius: 4px; display: none; pointer-events: none;
             font-family: sans-serif;
         }
+        #info {
+            position: absolute; top: 10px; width: 100%;
+            text-align: center; color: white; font-family: sans-serif;
+            z-index: 1;
+        }
     </style>
     <script type="importmap">
         {
@@ -20,6 +25,8 @@
     </script>
 </head>
 <body>
+    <div id="info">Loading Point Cloud...</div>
+
     <div id="tooltip">Go to Kitchen</div>
     <script src="results/panorama_results.js" type="application/javascript"></script>
     <script type="module">
@@ -111,6 +118,8 @@
             
             const loader = new THREE.TextureLoader();
             loader.load(data.texture, (texture) => {
+                document.getElementById('info').innerHTML = "<a href='./point-cloud.html' style='color: #0000ff;'>Go to Point Cloud</a>";
+
                 texture.minFilter = THREE.LinearFilter;
                 texture.magFilter = THREE.LinearFilter;
                 texture.mapping = THREE.EquirectangularReflectionMapping;
